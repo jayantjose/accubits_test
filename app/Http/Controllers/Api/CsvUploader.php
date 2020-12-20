@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessCsv;
+use Exception;
 use Illuminate\Support\Facades\Validator;
 
 class CsvUploader extends Controller
@@ -18,6 +20,9 @@ class CsvUploader extends Controller
                              ];
 
     public function uploadCsv(Request $request) {
+        $messages = [];
+        $status = "400";
+        
         $validator = Validator::make($request->all(), [
             'csvfile' => 'required|mimes:csv,txt|max:2048',
         ]);
@@ -26,61 +31,72 @@ class CsvUploader extends Controller
             return response()->json($validator->errors(),400);
         }
 
-        // Declare Error Message Array to show all error messages as one result
-        $error_messages = [];
-        if(request()->csvfile) {
-            // Validate Extension since validator will not trap if the uploaded file is a txt file
-            $extension = $request->csvfile->getClientOriginalExtension();
-            if(strtolower($extension) != "csv")  {
-                $error_messages[] = "Only file with CSV extension will be accepted";
-            }
-        
-            // Import CSV to array for row wise validations
-            $data = $this->fetchCsv($request); // Fetch the CSV data
+        $fileName = request()->csvfile->getClientOriginalName();
+        $csvfile = request()->csvfile->getRealPath();
 
-            if(count($data)>0) {
-                // Validate Input Data Column Count
-                if(!$this->validateColumnCount($data)) {
-                    $reqcount = count($this->configurations["headers"])-1;
-                    $error_messages[] = "Column count in CSV data is not matching with required column count: " . $reqcount;
+        try {
+
+            // Declare Error Message Array to show all error messages as one result
+            if(request()->csvfile) {
+                // Validate Extension since validator will not trap if the uploaded file is a txt file
+                $extension = $request->csvfile->getClientOriginalExtension();
+                if(strtolower($extension) != "csv")  {
+                    $messages[] = "Only file with CSV extension will be accepted";
                 }
+            
+                // Import CSV to array for row wise validations
+                $data = $this->fetchCsv($request); // Fetch the CSV data
 
-                // Validate Headings
-                if(!$this->validateHeaderRow($data)) {
-                    $error_messages[] = "CSV Heading Column names are mismatching. Acceptable headers are: ".implode(',',$this->configurations["headers"]);
-                }
+                if(count($data)>0) {
+                    // Validate Input Data Column Count
+                    if(!$this->validateColumnCount($data)) {
+                        $reqcount = count($this->configurations["headers"])-1;
+                        $messages[] = "Column count in CSV data is not matching with required column count: " . $reqcount;
+                    }
 
-                // Validate row data for finding missing and non allowable characters
-                $validator = Validator::make($data, $this->configurations["validations"]);
-                
-                //Now check validation:
-                if ($validator->fails()) 
-                { 
-                    $error_messages[]["Row Validations"] = $validator->errors();
-                }
+                    // Validate Headings
+                    if(!$this->validateHeaderRow($data)) {
+                        $messages[] = "CSV Heading Column names are mismatching. Acceptable headers are: ".implode(',',$this->configurations["headers"]);
+                    }
 
-                // Check if there is any errors found. If no errors then copy the file to import folder.
-                // From this folder csv convertion program will read file and save to database
-                if(count($error_messages)<=0) {
-                    $fileName = request()->csvfile->getClientOriginalName();
-                    if($request->csvfile->storeAs('/',$fileName,'csvfiles-in')) {
-                        return response()->json([
-                            "success" => true,
-                            "message" => "File successfully uploaded and send to the process que",
-                            "file" => $fileName
-                        ]);
+                    // Validate row data for finding missing and non allowable characters
+                    $validator = Validator::make($data, $this->configurations["validations"]);
+                    
+                    //Now check validation:
+                    if ($validator->fails()) 
+                    { 
+                        $messages[]["Row Validations"] = $validator->errors();
+                    }
+
+                    // Check if there is any errors found. If no errors then copy the file to import folder.
+                    // From this folder csv convertion program will read file and save to database
+                    if(count($messages)<=0) {
+                        if($request->csvfile->storeAs('/',$fileName,'csvfiles-in')) {
+                            $messages[] = "File successfully uploaded and send to the process que";
+                            $status = 200;
+                        }
+                    }
+                    else {
+                        $messages[] = "Error in processing CSV file";    
                     }
                 }
                 else {
-                    return response()->json($error_messages,400);
+                    $messages[] = "No Data Found";
                 }
             }
-            else {
-                $error_messages[] = "No Data Found";
-                return response()->json($error_messages,400);
-            }
+        }
+        catch(Exception $ex ){
+            $messages[] = "Unexpected Error in processing CSV file";
         }
 
+        $messageData =  [
+                            'message'=> $messages,
+                            'filename' => $fileName,
+                            'csvfile' => $csvfile
+                        ];
+        ProcessCsv::dispatch($messageData);
+
+        return response()->json($messageData['message'],200);
     }
 
     // Return a schedule CSV
