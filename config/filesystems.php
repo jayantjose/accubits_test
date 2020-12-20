@@ -52,6 +52,19 @@ return [
             'endpoint' => env('AWS_ENDPOINT'),
         ],
 
+        'csvfiles-in' => [
+            'driver' => 'local',
+            'root' => storage_path('app/public/csvfiles-in'),
+            'visibility' => 'public',
+        ],
+
+        'csvfiles-out' => [
+            'driver' => 'local',
+            'root' => storage_path('app/public/csvfiles-out'),
+            'visibility' => 'public',
+        ],
+
+
     ],
 
     /*
